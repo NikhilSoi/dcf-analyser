@@ -5,7 +5,9 @@ import {
 } from "recharts";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const FMP_KEY = process.env.REACT_APP_FMP_KEY || "demo"; // ← replace with your FMP key from financialmodelingprep.com
+// Replace "demo" with your FMP key from financialmodelingprep.com
+// In Vercel use: process.env.REACT_APP_FMP_KEY
+const FMP_KEY = process.env.REACT_APP_FMP_KEY || "demo";
 
 // ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
 const C = {
@@ -181,11 +183,16 @@ export default function DCFAnalyser() {
   const [projYears, setProjYears] = useState(5);
   const [growthAdj, setGrowthAdj] = useState(0);
 
-  const fmp = useCallback(async (path) => {
-    if (FMP_KEY === "demo") return null;
-    const res = await fetch(`https://financialmodelingprep.com/api${path}&apikey=${FMP_KEY}`);
-    if (!res.ok) throw new Error(`FMP error: ${res.status}`);
-    return res.json();
+  // Yahoo Finance via allorigins proxy (no API key needed)
+  const yahooFetch = useCallback(async (sym, module) => {
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${sym}?modules=${module}`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const res = await fetch(proxy);
+    if (!res.ok) throw new Error("Network error — try again");
+    const outer = await res.json();
+    const parsed = JSON.parse(outer.contents);
+    if (parsed.quoteSummary?.error) throw new Error(`Yahoo Finance: ${parsed.quoteSummary.error.description}`);
+    return parsed.quoteSummary?.result?.[0];
   }, []);
 
   const analyse = useCallback(async () => {
@@ -193,27 +200,111 @@ export default function DCFAnalyser() {
     setLoading(true); setError(""); setData(null);
     const sym = ticker.trim().toUpperCase();
     try {
+      // Always use demo data if key is "demo", otherwise use Yahoo Finance
       if (FMP_KEY === "demo") {
         await new Promise(r => setTimeout(r, 900));
         setData(getDemoData(sym));
-      } else {
-        const [profile, income, cashflow, balance, ratios] = await Promise.all([
-          fmp(`/v3/profile/${sym}?`),
-          fmp(`/v3/income-statement/${sym}?limit=5&`),
-          fmp(`/v3/cash-flow-statement/${sym}?limit=5&`),
-          fmp(`/v3/balance-sheet-statement/${sym}?limit=5&`),
-          fmp(`/v3/ratios/${sym}?limit=5&`),
-        ]);
-        if (!profile?.length) throw new Error("Ticker not found. Check the symbol and try again.");
-        const rev = [...income].reverse();
-        const rcf = [...cashflow].reverse();
-        const rbs = [...balance].reverse();
-        const rrt = [...ratios].reverse();
-        setData({ profile: profile[0], income: rev, cashflow: rcf, balance: rbs, ratios: rrt });
+        setLoading(false);
+        return;
       }
+
+      // Fetch all modules from Yahoo Finance
+      const [summary, financials, cashflow, balance, stats] = await Promise.all([
+        yahooFetch(sym, "summaryDetail,assetProfile,price"),
+        yahooFetch(sym, "incomeStatementHistory"),
+        yahooFetch(sym, "cashflowStatementHistory"),
+        yahooFetch(sym, "balanceSheetHistory"),
+        yahooFetch(sym, "defaultKeyStatistics,financialData"),
+      ]);
+
+      const price   = summary?.price;
+      const profile = summary?.assetProfile;
+      const detail  = summary?.summaryDetail;
+      const fdata   = stats?.financialData;
+      const kstats  = stats?.defaultKeyStatistics;
+
+      if (!price) throw new Error("Ticker not found. Check the symbol and try again.");
+
+      // Normalise income statements (Yahoo returns most recent first)
+      const incomeRaw = [...(financials?.incomeStatementHistory?.incomeStatementHistory ?? [])].reverse();
+      const cashRaw   = [...(cashflow?.cashflowStatementHistory?.cashflowStatementHistory ?? [])].reverse();
+      const balRaw    = [...(balance?.balanceSheetHistory?.balanceSheetStatements ?? [])].reverse();
+
+      const v = (obj, key) => obj?.[key]?.raw ?? null;
+
+      const incomeNorm = incomeRaw.map(d => ({
+        date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
+        revenue:         v(d,"totalRevenue"),
+        grossProfit:     v(d,"grossProfit"),
+        operatingIncome: v(d,"operatingIncome") ?? v(d,"ebit"),
+        netIncome:       v(d,"netIncome"),
+        ebitda:          v(d,"ebitda") ?? ((v(d,"operatingIncome") ?? 0) + (v(d,"depreciation") ?? 0)),
+      }));
+
+      const cashNorm = cashRaw.map(d => {
+        const ocf  = v(d,"totalCashFromOperatingActivities");
+        const capex = v(d,"capitalExpenditures");
+        const fcf  = ocf != null && capex != null ? ocf + capex : null; // capex is negative in Yahoo
+        return {
+          date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
+          operatingCashFlow: ocf,
+          capitalExpenditure: capex,
+          freeCashFlow: fcf,
+          netIncome: v(d,"netIncome"),
+        };
+      });
+
+      const balNorm = balRaw.map(d => ({
+        date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
+        cashAndCashEquivalents: v(d,"cash") ?? v(d,"cashAndCashEquivalents"),
+        totalDebt:              (v(d,"shortLongTermDebt") ?? 0) + (v(d,"longTermDebt") ?? 0),
+        totalStockholdersEquity: v(d,"totalStockholderEquity"),
+        totalAssets:            v(d,"totalAssets"),
+        totalLiabilities:       v(d,"totalLiab"),
+      }));
+
+      // Build ratios from available data
+      const ratiosNorm = incomeNorm.map((d, i) => {
+        const cf  = cashNorm[i];
+        const bs  = balNorm[i];
+        const rev = d.revenue || 1;
+        const eq  = bs?.totalStockholdersEquity || 1;
+        const assets = bs?.totalAssets || 1;
+        const ebitda = d.ebitda || 1;
+        return {
+          date:                       d.date,
+          peRatio:                    kstats?.trailingPE?.raw ?? null,
+          evToEbitda:                 kstats?.enterpriseToEbitda?.raw ?? null,
+          priceToFreeCashFlowsRatio:  kstats?.priceToFreeCashflows?.raw ?? null,
+          returnOnEquity:             d.netIncome / eq,
+          returnOnAssets:             d.netIncome / assets,
+          debtToEquity:               (bs?.totalDebt ?? 0) / eq,
+          grossProfitMargin:          d.grossProfit / rev,
+          operatingProfitMargin:      d.operatingIncome / rev,
+          netProfitMargin:            d.netIncome / rev,
+          freeCashFlowPerShare:       cf?.freeCashFlow && kstats?.sharesOutstanding?.raw
+                                        ? cf.freeCashFlow / kstats.sharesOutstanding.raw : null,
+        };
+      });
+
+      setData({
+        profile: {
+          name:               price?.longName ?? price?.shortName ?? sym,
+          price:              price?.regularMarketPrice?.raw ?? 0,
+          mktCap:             price?.marketCap?.raw ?? 0,
+          sector:             profile?.sector ?? "—",
+          beta:               detail?.beta?.raw ?? kstats?.beta?.raw ?? null,
+          sharesOutstanding:  kstats?.sharesOutstanding?.raw ?? price?.sharesOutstanding?.raw ?? 1,
+        },
+        income:   incomeNorm,
+        cashflow: cashNorm,
+        balance:  balNorm,
+        ratios:   ratiosNorm,
+      });
+
     } catch (e) { setError(e.message); }
     setLoading(false);
-  }, [ticker, fmp]);
+  }, [ticker, yahooFetch]);
 
   // ── derived chart data ──────────────────────────────────────────────────────
   const years = data?.income?.map(d => d.date.slice(0, 4)) ?? [];
@@ -361,8 +452,7 @@ export default function DCFAnalyser() {
 
         {FMP_KEY === "demo" && !data && (
           <div style={{ fontSize: 11, color: C.textDim, marginBottom: 16, padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface }}>
-            ⬡ DEMO MODE — showing simulated data for any ticker. Replace <span style={{ color: C.amber }}>FMP_KEY</span> with your key from{" "}
-            <a href="https://financialmodelingprep.com" target="_blank" rel="noreferrer" style={{ color: C.blue }}>financialmodelingprep.com</a> for live data.
+            ⬡ DEMO MODE — showing simulated data. To enable live Yahoo Finance data, set <span style={{ color: C.amber }}>REACT_APP_FMP_KEY</span> to any non-demo value in your environment variables (e.g. <span style={{ color: C.amber }}>"live"</span>). No API key required — Yahoo Finance is free.
           </div>
         )}
 
