@@ -2,12 +2,11 @@ import { useState, useCallback } from "react";
 import {
   LineChart, Line, BarChart, Bar, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceLine
+  ResponsiveContainer
 } from "recharts";
 
 const FMP = process.env.REACT_APP_FMP_KEY || "demo";
 const BASE = "/fmpapi";
-const PROXY = "https://api.allorigins.win/get?url=";
 
 const fmt = (n, dec = 1) => {
   if (n == null || isNaN(n)) return "—";
