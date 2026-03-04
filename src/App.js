@@ -35,7 +35,7 @@ const S = {
   card: { background: COLORS.card, border: `1px solid ${COLORS.border}`, padding: 16, marginBottom: 12 },
   input: { background: "#111827", border: `1px solid ${COLORS.border}`, color: COLORS.text, padding: "8px 12px", fontFamily: "inherit", fontSize: 13, outline: "none", width: 160 },
   btn: { background: COLORS.amber, color: "#000", border: "none", padding: "8px 20px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer" },
-  tab: (active) => ({ padding: "8px 18px", cursor: "pointer", borderBottom: active ? `2px solid ${COLORS.amber}` : "2px solid transparent", color: active ? COLORS.amber : COLORS.muted, background: "none", border: "none", borderBottom: active ? `2px solid ${COLORS.amber}` : `2px solid transparent`, fontFamily: "inherit", fontSize: 12, fontWeight: active ? 700 : 400, letterSpacing: 1 }),
+  tab: (active) => ({ padding: "8px 18px", cursor: "pointer", borderBottom: active ? `2px solid ${COLORS.amber}` : "2px solid transparent", color: active ? COLORS.amber : COLORS.muted, background: "none", fontFamily: "inherit", fontSize: 12, fontWeight: active ? 700 : 400, letterSpacing: 1 }),
   th: { padding: "6px 12px", color: COLORS.muted, fontWeight: 400, fontSize: 11, textAlign: "right", borderBottom: `1px solid ${COLORS.border}`, letterSpacing: 0.5 },
   td: { padding: "6px 12px", textAlign: "right", borderBottom: `1px solid ${COLORS.border}` },
   tdL: { padding: "6px 12px", textAlign: "left", borderBottom: `1px solid ${COLORS.border}`, color: COLORS.dim },
