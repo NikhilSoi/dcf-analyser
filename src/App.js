@@ -1,806 +1,683 @@
 import { useState, useCallback } from "react";
 import {
-  LineChart, Line, BarChart, Bar, ComposedChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend
+  LineChart, Line, BarChart, Bar, ComposedChart,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, ReferenceLine
 } from "recharts";
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-// Replace "demo" with your FMP key from financialmodelingprep.com
-// In Vercel use: process.env.REACT_APP_FMP_KEY
-const FMP_KEY = process.env.REACT_APP_FMP_KEY || "demo";
+const FMP = process.env.REACT_APP_FMP_KEY || "demo";
+const BASE = "/fmpapi";
+const PROXY = "https://api.allorigins.win/get?url=";
 
-// ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
-const C = {
-  bg:       "#080b0f",
-  surface:  "#0d1117",
-  border:   "#1a2332",
-  borderHi: "#243447",
-  amber:    "#f0a500",
-  green:    "#00c48c",
-  red:      "#ff4d4d",
-  blue:     "#4d9fff",
-  muted:    "#4a5568",
-  dim:      "#2d3748",
-  text:     "#e8edf3",
-  textSoft: "#8899aa",
-  textDim:  "#4a5a6a",
-};
-
-// ─── UTILITIES ────────────────────────────────────────────────────────────────
-const fB = (n, dec = 1) => {
+const fmt = (n, dec = 1) => {
   if (n == null || isNaN(n)) return "—";
   const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(dec)}T`;
-  if (abs >= 1e9)  return `${sign}$${(abs / 1e9).toFixed(dec)}B`;
-  if (abs >= 1e6)  return `${sign}$${(abs / 1e6).toFixed(dec)}M`;
-  return `${sign}$${abs.toFixed(0)}`;
+  if (abs >= 1e12) return (n / 1e12).toFixed(dec) + "T";
+  if (abs >= 1e9)  return (n / 1e9).toFixed(dec) + "B";
+  if (abs >= 1e6)  return (n / 1e6).toFixed(dec) + "M";
+  if (abs >= 1e3)  return (n / 1e3).toFixed(dec) + "K";
+  return n.toFixed(dec);
 };
-const fP = (n, dec = 1) => (n == null || isNaN(n)) ? "—" : `${(n * 100).toFixed(dec)}%`;
-const fN = (n, dec = 1) => (n == null || isNaN(n)) ? "—" : n.toFixed(dec);
-const fX = (n, dec = 1) => (n == null || isNaN(n)) ? "—" : `${n.toFixed(dec)}x`;
-const pct = (a, b) => (b && b !== 0) ? (a - b) / Math.abs(b) : null;
-const cagr = (first, last, years) => years > 0 && first > 0 ? Math.pow(last / first, 1 / years) - 1 : null;
+const pct = (n) => n == null || isNaN(n) ? "—" : (n * 100).toFixed(1) + "%";
+const fmtN = (n, dec = 2) => n == null || isNaN(n) ? "—" : Number(n).toFixed(dec);
+const yoy = (arr, key, i) => {
+  if (i >= arr.length - 1 || !arr[i + 1][key] || !arr[i][key]) return null;
+  return (arr[i][key] - arr[i + 1][key]) / Math.abs(arr[i + 1][key]);
+};
 
-// ─── DCF ENGINE ───────────────────────────────────────────────────────────────
-function runDCF({ baseFCF, growthRate, terminalGrowth, wacc, years, cash, debt, shares }) {
-  const flows = [];
-  let fcf = baseFCF, pv = 0;
-  for (let i = 1; i <= years; i++) {
-    fcf *= (1 + growthRate);
-    const d = fcf / Math.pow(1 + wacc, i);
-    flows.push({ year: `Y+${i}`, fcf, discounted: d });
-    pv += d;
-  }
-  const tv = (fcf * (1 + terminalGrowth)) / (wacc - terminalGrowth);
-  const pvTv = tv / Math.pow(1 + wacc, years);
-  const ev = pv + pvTv;
-  const eq = ev + cash - debt;
-  return { flows, pv, pvTerminal: pvTv, terminalValue: tv, enterpriseValue: ev, equityValue: eq,
-    intrinsicPrice: shares > 0 ? eq / shares : null };
+const COLORS = {
+  bg: "#080b0f", card: "#0d1117", border: "#1e2530",
+  amber: "#f0a500", green: "#00c48c", red: "#ff4d4d",
+  blue: "#4da6ff", muted: "#6b7280", text: "#e2e8f0", dim: "#94a3b8"
+};
+
+const S = {
+  app: { background: COLORS.bg, minHeight: "100vh", color: COLORS.text, fontFamily: "'JetBrains Mono', 'Courier New', monospace", fontSize: 13 },
+  card: { background: COLORS.card, border: `1px solid ${COLORS.border}`, padding: 16, marginBottom: 12 },
+  input: { background: "#111827", border: `1px solid ${COLORS.border}`, color: COLORS.text, padding: "8px 12px", fontFamily: "inherit", fontSize: 13, outline: "none", width: 160 },
+  btn: { background: COLORS.amber, color: "#000", border: "none", padding: "8px 20px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer" },
+  tab: (active) => ({ padding: "8px 18px", cursor: "pointer", borderBottom: active ? `2px solid ${COLORS.amber}` : "2px solid transparent", color: active ? COLORS.amber : COLORS.muted, background: "none", border: "none", borderBottom: active ? `2px solid ${COLORS.amber}` : `2px solid transparent`, fontFamily: "inherit", fontSize: 12, fontWeight: active ? 700 : 400, letterSpacing: 1 }),
+  th: { padding: "6px 12px", color: COLORS.muted, fontWeight: 400, fontSize: 11, textAlign: "right", borderBottom: `1px solid ${COLORS.border}`, letterSpacing: 0.5 },
+  td: { padding: "6px 12px", textAlign: "right", borderBottom: `1px solid ${COLORS.border}` },
+  tdL: { padding: "6px 12px", textAlign: "left", borderBottom: `1px solid ${COLORS.border}`, color: COLORS.dim },
+  label: { fontSize: 11, color: COLORS.muted, marginBottom: 2, letterSpacing: 0.5 },
+  val: { fontSize: 22, fontWeight: 700, color: COLORS.text },
+  kpiCard: { background: COLORS.card, border: `1px solid ${COLORS.border}`, padding: "12px 16px", minWidth: 140 },
+};
+
+const tooltipStyle = { backgroundColor: COLORS.card, border: `1px solid ${COLORS.border}`, fontFamily: "inherit", fontSize: 11 };
+
+async function fmpFetch(path) {
+  const url = `${BASE}${path}&apikey=${FMP}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
-// ─── DEMO DATA ────────────────────────────────────────────────────────────────
-function getDemoData(ticker) {
-  const T = ticker || "AAPL";
-  const years = ["2019","2020","2021","2022","2023"];
-  return {
-    profile: { name: `${T} Corporation`, price: 189.30, mktCap: 2.94e12, sector: "Technology", beta: 1.24, sharesOutstanding: 15.5e9 },
-    income: years.map((y, i) => ({
-      date: y, revenue: [260e9,274e9,365e9,394e9,383e9][i],
-      grossProfit: [98e9,105e9,153e9,170e9,169e9][i],
-      operatingIncome: [64e9,66e9,109e9,119e9,114e9][i],
-      netIncome: [55e9,57e9,95e9,100e9,97e9][i],
-      ebitda: [76e9,81e9,123e9,133e9,129e9][i],
-    })),
-    cashflow: years.map((y, i) => ({
-      date: y,
-      operatingCashFlow: [69e9,80e9,104e9,122e9,110e9][i],
-      capitalExpenditure: [-8e9,-7.3e9,-11e9,-10.7e9,-10.9e9][i],
-      freeCashFlow: [61e9,73e9,93e9,111e9,99e9][i],
-      netIncome: [55e9,57e9,95e9,100e9,97e9][i],
-    })),
-    balance: years.map((y, i) => ({
-      date: y,
-      cashAndCashEquivalents: [48e9,38e9,34e9,23e9,30e9][i],
-      totalDebt: [108e9,112e9,124e9,120e9,109e9][i],
-      totalStockholdersEquity: [90e9,65e9,63e9,50e9,62e9][i],
-      totalAssets: [338e9,323e9,351e9,352e9,352e9][i],
-      totalLiabilities: [248e9,258e9,287e9,302e9,290e9][i],
-    })),
-    ratios: years.map((y, i) => ({
-      date: y,
-      peRatio: [22,35,29,24,30][i],
-      evToEbitda: [16,22,24,18,22][i],
-      priceToFreeCashFlowsRatio: [27,35,34,27,30][i],
-      returnOnEquity: [0.61,0.88,1.50,1.96,1.56][i],
-      returnOnAssets: [0.16,0.18,0.27,0.28,0.27][i],
-      debtToEquity: [1.19,1.72,1.97,2.39,1.76][i],
-      grossProfitMargin: [0.378,0.382,0.418,0.433,0.441][i],
-      operatingProfitMargin: [0.247,0.241,0.298,0.302,0.297][i],
-      netProfitMargin: [0.212,0.209,0.259,0.253,0.253][i],
-      freeCashFlowPerShare: [3.93,4.71,5.56,7.26,6.43][i],
-    })),
-  };
-}
+const colorVal = (v, good = "pos") => {
+  if (v == null || isNaN(v)) return COLORS.text;
+  if (good === "pos") return v >= 0 ? COLORS.green : COLORS.red;
+  return v <= 0 ? COLORS.green : COLORS.red;
+};
 
-// ─── CUSTOM TOOLTIP ───────────────────────────────────────────────────────────
-const ChartTip = ({ active, payload, label, formatter }) => {
-  if (!active || !payload?.length) return null;
+// ── TABS ──────────────────────────────────────────────────────────────────────
+
+function IncomeTab({ income }) {
+  const rows = [...income].reverse();
+  const chartData = rows.map((d, i) => ({
+    year: d.date?.slice(0, 4),
+    Revenue: d.revenue / 1e9,
+    GrossProfit: d.grossProfit / 1e9,
+    NetIncome: d.netIncome / 1e9,
+    EBITDA: d.ebitda / 1e9,
+    GrossMargin: (d.grossProfit / d.revenue) * 100,
+    NetMargin: (d.netIncome / d.revenue) * 100,
+    OpMargin: (d.operatingIncome / d.revenue) * 100,
+  }));
+
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.borderHi}`, padding: "8px 12px", fontSize: 12, fontFamily: "inherit" }}>
-      <div style={{ color: C.amber, marginBottom: 4, fontWeight: 600 }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color || C.text, display: "flex", gap: 10 }}>
-          <span style={{ color: C.textSoft }}>{p.name}</span>
-          <span>{formatter ? formatter(p.value) : p.value}</span>
-        </div>
-      ))}
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>REVENUE & PROFIT (USD Billions)</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="year" tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v) => `$${v.toFixed(1)}B`} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="Revenue" fill={COLORS.blue} opacity={0.7} />
+            <Bar dataKey="GrossProfit" fill={COLORS.green} opacity={0.7} />
+            <Line type="monotone" dataKey="NetIncome" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>MARGIN TRENDS (%)</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="year" tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} unit="%" />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v) => `${v.toFixed(1)}%`} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line type="monotone" dataKey="GrossMargin" stroke={COLORS.green} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="OpMargin" stroke={COLORS.blue} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="NetMargin" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...S.th, textAlign: "left" }}>METRIC</th>
+            {income.map(d => <th key={d.date} style={S.th}>{d.date?.slice(0, 4)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {[
+            ["Revenue", "revenue"],
+            ["Gross Profit", "grossProfit"],
+            ["EBITDA", "ebitda"],
+            ["Operating Income", "operatingIncome"],
+            ["Net Income", "netIncome"],
+            ["EPS (Diluted)", "epsdiluted"],
+          ].map(([label, key]) => (
+            <tr key={key}>
+              <td style={S.tdL}>{label}</td>
+              {income.map((d, i) => (
+                <td key={d.date} style={{ ...S.td, color: key === "epsdiluted" ? COLORS.text : COLORS.text }}>
+                  {key === "epsdiluted" ? `$${fmtN(d[key])}` : `$${fmt(d[key])}`}
+                  {i < income.length - 1 && yoy(income, key, i) != null && (
+                    <span style={{ fontSize: 10, marginLeft: 4, color: colorVal(yoy(income, key, i)) }}>
+                      {yoy(income, key, i) >= 0 ? "▲" : "▼"}{Math.abs(yoy(income, key, i) * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
-};
+}
 
-// ─── SECTION HEADER ──────────────────────────────────────────────────────────
-const SectionHead = ({ n, label, sub }) => (
-  <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>
-    <span style={{ fontSize: 10, color: C.amber, fontWeight: 700, letterSpacing: 2, border: `1px solid ${C.amber}44`, padding: "2px 6px" }}>{String(n).padStart(2,"0")}</span>
-    <span style={{ fontSize: 16, fontWeight: 700, color: C.text, letterSpacing: -0.3 }}>{label}</span>
-    {sub && <span style={{ fontSize: 11, color: C.textSoft }}>{sub}</span>}
-  </div>
-);
-
-// ─── KPI CARD ─────────────────────────────────────────────────────────────────
-const KPI = ({ label, value, sub, color, trend }) => (
-  <div style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "14px 16px", borderLeft: `2px solid ${color || C.amber}` }}>
-    <div style={{ fontSize: 10, color: C.textSoft, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 6 }}>{label}</div>
-    <div style={{ fontSize: 20, fontWeight: 700, color: color || C.text, letterSpacing: -0.5 }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: trend > 0 ? C.green : trend < 0 ? C.red : C.textSoft, marginTop: 4 }}>
-      {trend != null ? (trend > 0 ? "▲" : "▼") + " " : ""}{sub}
-    </div>}
-  </div>
-);
-
-// ─── METRIC ROW TABLE ─────────────────────────────────────────────────────────
-const MetricTable = ({ rows, years }) => (
-  <div style={{ overflowX: "auto" }}>
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-      <thead>
-        <tr>
-          <th style={{ textAlign: "left", padding: "8px 12px", color: C.textSoft, fontWeight: 600, borderBottom: `1px solid ${C.border}`, width: 180 }}>Metric</th>
-          {years.map(y => <th key={y} style={{ textAlign: "right", padding: "8px 12px", color: C.amber, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{y}</th>)}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, i) => (
-          <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : "#0a0f1500" }}>
-            <td style={{ padding: "7px 12px", color: C.textSoft, borderBottom: `1px solid ${C.border}22` }}>{row.label}</td>
-            {row.values.map((v, j) => {
-              const prev = row.values[j - 1];
-              const delta = prev != null ? pct(v?.raw ?? v, prev?.raw ?? prev) : null;
-              const color = row.noColor ? C.text : delta == null ? C.text : delta > 0 ? C.green : delta < 0 ? C.red : C.text;
-              return <td key={j} style={{ textAlign: "right", padding: "7px 12px", color, fontWeight: 500, borderBottom: `1px solid ${C.border}22`, fontVariantNumeric: "tabular-nums" }}>
-                {typeof v === "object" ? v.display : v}
-              </td>;
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
-
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function DCFAnalyser() {
-  const [ticker, setTicker] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [data, setData] = useState(null);
-  const [activeTab, setActiveTab] = useState(0);
-
-  // DCF assumptions
-  const [wacc, setWacc] = useState(0.10);
-  const [termGrowth, setTermGrowth] = useState(0.025);
-  const [projYears, setProjYears] = useState(5);
-  const [growthAdj, setGrowthAdj] = useState(0);
-
-  // Yahoo Finance via allorigins proxy (no API key needed)
-  const yahooFetch = useCallback(async (sym, module) => {
-    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${sym}?modules=${module}`;
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const res = await fetch(proxy);
-    if (!res.ok) throw new Error("Network error — try again");
-    const outer = await res.json();
-    const parsed = JSON.parse(outer.contents);
-    if (parsed.quoteSummary?.error) throw new Error(`Yahoo Finance: ${parsed.quoteSummary.error.description}`);
-    return parsed.quoteSummary?.result?.[0];
-  }, []);
-
-  const analyse = useCallback(async () => {
-    if (!ticker.trim()) return;
-    setLoading(true); setError(""); setData(null);
-    const sym = ticker.trim().toUpperCase();
-    try {
-      // Always use demo data if key is "demo", otherwise use Yahoo Finance
-      if (FMP_KEY === "demo") {
-        await new Promise(r => setTimeout(r, 900));
-        setData(getDemoData(sym));
-        setLoading(false);
-        return;
-      }
-
-      // Fetch all modules from Yahoo Finance
-      const [summary, financials, cashflow, balance, stats] = await Promise.all([
-        yahooFetch(sym, "summaryDetail,assetProfile,price"),
-        yahooFetch(sym, "incomeStatementHistory"),
-        yahooFetch(sym, "cashflowStatementHistory"),
-        yahooFetch(sym, "balanceSheetHistory"),
-        yahooFetch(sym, "defaultKeyStatistics,financialData"),
-      ]);
-
-      const price   = summary?.price;
-      const profile = summary?.assetProfile;
-      const detail  = summary?.summaryDetail;
-      const fdata   = stats?.financialData;
-      const kstats  = stats?.defaultKeyStatistics;
-
-      if (!price) throw new Error("Ticker not found. Check the symbol and try again.");
-
-      // Normalise income statements (Yahoo returns most recent first)
-      const incomeRaw = [...(financials?.incomeStatementHistory?.incomeStatementHistory ?? [])].reverse();
-      const cashRaw   = [...(cashflow?.cashflowStatementHistory?.cashflowStatementHistory ?? [])].reverse();
-      const balRaw    = [...(balance?.balanceSheetHistory?.balanceSheetStatements ?? [])].reverse();
-
-      const v = (obj, key) => obj?.[key]?.raw ?? null;
-
-      const incomeNorm = incomeRaw.map(d => ({
-        date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
-        revenue:         v(d,"totalRevenue"),
-        grossProfit:     v(d,"grossProfit"),
-        operatingIncome: v(d,"operatingIncome") ?? v(d,"ebit"),
-        netIncome:       v(d,"netIncome"),
-        ebitda:          v(d,"ebitda") ?? ((v(d,"operatingIncome") ?? 0) + (v(d,"depreciation") ?? 0)),
-      }));
-
-      const cashNorm = cashRaw.map(d => {
-        const ocf  = v(d,"totalCashFromOperatingActivities");
-        const capex = v(d,"capitalExpenditures");
-        const fcf  = ocf != null && capex != null ? ocf + capex : null; // capex is negative in Yahoo
-        return {
-          date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
-          operatingCashFlow: ocf,
-          capitalExpenditure: capex,
-          freeCashFlow: fcf,
-          netIncome: v(d,"netIncome"),
-        };
-      });
-
-      const balNorm = balRaw.map(d => ({
-        date: new Date(v(d,"endDate") * 1000).getFullYear().toString(),
-        cashAndCashEquivalents: v(d,"cash") ?? v(d,"cashAndCashEquivalents"),
-        totalDebt:              (v(d,"shortLongTermDebt") ?? 0) + (v(d,"longTermDebt") ?? 0),
-        totalStockholdersEquity: v(d,"totalStockholderEquity"),
-        totalAssets:            v(d,"totalAssets"),
-        totalLiabilities:       v(d,"totalLiab"),
-      }));
-
-      // Build ratios from available data
-      const ratiosNorm = incomeNorm.map((d, i) => {
-        const cf  = cashNorm[i];
-        const bs  = balNorm[i];
-        const rev = d.revenue || 1;
-        const eq  = bs?.totalStockholdersEquity || 1;
-        const assets = bs?.totalAssets || 1;
-        const ebitda = d.ebitda || 1;
-        return {
-          date:                       d.date,
-          peRatio:                    kstats?.trailingPE?.raw ?? null,
-          evToEbitda:                 kstats?.enterpriseToEbitda?.raw ?? null,
-          priceToFreeCashFlowsRatio:  kstats?.priceToFreeCashflows?.raw ?? null,
-          returnOnEquity:             d.netIncome / eq,
-          returnOnAssets:             d.netIncome / assets,
-          debtToEquity:               (bs?.totalDebt ?? 0) / eq,
-          grossProfitMargin:          d.grossProfit / rev,
-          operatingProfitMargin:      d.operatingIncome / rev,
-          netProfitMargin:            d.netIncome / rev,
-          freeCashFlowPerShare:       cf?.freeCashFlow && kstats?.sharesOutstanding?.raw
-                                        ? cf.freeCashFlow / kstats.sharesOutstanding.raw : null,
-        };
-      });
-
-      setData({
-        profile: {
-          name:               price?.longName ?? price?.shortName ?? sym,
-          price:              price?.regularMarketPrice?.raw ?? 0,
-          mktCap:             price?.marketCap?.raw ?? 0,
-          sector:             profile?.sector ?? "—",
-          beta:               detail?.beta?.raw ?? kstats?.beta?.raw ?? null,
-          sharesOutstanding:  kstats?.sharesOutstanding?.raw ?? price?.sharesOutstanding?.raw ?? 1,
-        },
-        income:   incomeNorm,
-        cashflow: cashNorm,
-        balance:  balNorm,
-        ratios:   ratiosNorm,
-      });
-
-    } catch (e) { setError(e.message); }
-    setLoading(false);
-  }, [ticker, yahooFetch]);
-
-  // ── derived chart data ──────────────────────────────────────────────────────
-  const years = data?.income?.map(d => d.date.slice(0, 4)) ?? [];
-
-  const incomeChart = data?.income?.map((d, i) => ({
-    year: d.date.slice(0, 4),
-    Revenue: +(d.revenue / 1e9).toFixed(1),
-    "Gross Profit": +(d.grossProfit / 1e9).toFixed(1),
-    EBITDA: +(d.ebitda / 1e9).toFixed(1),
-    "Net Income": +(d.netIncome / 1e9).toFixed(1),
+function CashFlowTab({ cashflow, profile }) {
+  const rows = [...cashflow].reverse();
+  const marketCap = profile?.[0]?.mktCap;
+  const chartData = rows.map(d => ({
+    year: d.date?.slice(0, 4),
+    OperatingCF: d.operatingCashFlow / 1e9,
+    CapEx: Math.abs(d.capitalExpenditure) / 1e9,
+    FCF: (d.operatingCashFlow + d.capitalExpenditure) / 1e9,
   }));
-
-  const marginChart = data?.income?.map((d) => ({
-    year: d.date.slice(0, 4),
-    "Gross Margin": +((d.grossProfit / d.revenue) * 100).toFixed(1),
-    "Op Margin": +((d.operatingIncome / d.revenue) * 100).toFixed(1),
-    "Net Margin": +((d.netIncome / d.revenue) * 100).toFixed(1),
-  }));
-
-  const fcfChart = data?.cashflow?.map((d) => ({
-    year: d.date.slice(0, 4),
-    "Operating CF": +(d.operatingCashFlow / 1e9).toFixed(1),
-    CapEx: +(Math.abs(d.capitalExpenditure) / 1e9).toFixed(1),
-    FCF: +(d.freeCashFlow / 1e9).toFixed(1),
-    "Net Income": +(d.netIncome / 1e9).toFixed(1),
-  }));
-
-  const balanceChart = data?.balance?.map((d) => ({
-    year: d.date.slice(0, 4),
-    Cash: +(d.cashAndCashEquivalents / 1e9).toFixed(1),
-    Debt: +(d.totalDebt / 1e9).toFixed(1),
-    Equity: +(d.totalStockholdersEquity / 1e9).toFixed(1),
-  }));
-
-  const valChart = data?.ratios?.map((d) => ({
-    year: d.date.slice(0, 4),
-    "P/E": +fN(d.peRatio),
-    "EV/EBITDA": +fN(d.evToEbitda),
-    "P/FCF": +fN(d.priceToFreeCashFlowsRatio),
-  }));
-
-  // ── DCF auto-population ──────────────────────────────────────────────────────
-  const fcfHistory = data?.cashflow?.map(d => d.freeCashFlow) ?? [];
-  const latestFCF = fcfHistory[fcfHistory.length - 1] ?? 0;
-  const fcfCAGR = fcfHistory.length >= 2 ? cagr(fcfHistory[0], fcfHistory[fcfHistory.length - 1], fcfHistory.length - 1) : 0.08;
-  const suggestedGrowth = Math.min(Math.max((fcfCAGR ?? 0.08) * 0.7, 0.02), 0.25);
-  const effectiveGrowth = suggestedGrowth + growthAdj;
-  const cash = data?.balance?.[data.balance.length - 1]?.cashAndCashEquivalents ?? 0;
-  const debt = data?.balance?.[data.balance.length - 1]?.totalDebt ?? 0;
-  const shares = data?.profile?.sharesOutstanding ?? 1;
-  const currentPrice = data?.profile?.price ?? 0;
-
-  const dcf = data ? runDCF({ baseFCF: latestFCF, growthRate: effectiveGrowth, terminalGrowth: termGrowth, wacc, years: projYears, cash, debt, shares }) : null;
-  const upside = dcf?.intrinsicPrice && currentPrice ? (dcf.intrinsicPrice - currentPrice) / currentPrice : null;
-
-  // ── income table rows ────────────────────────────────────────────────────────
-  const incomeRows = data ? [
-    { label: "Revenue", values: data.income.map(d => fB(d.revenue)) },
-    { label: "Gross Profit", values: data.income.map(d => fB(d.grossProfit)) },
-    { label: "Gross Margin", values: data.income.map(d => fP(d.grossProfit / d.revenue)), noColor: false },
-    { label: "EBITDA", values: data.income.map(d => fB(d.ebitda)) },
-    { label: "Operating Income", values: data.income.map(d => fB(d.operatingIncome)) },
-    { label: "Op Margin", values: data.income.map(d => fP(d.operatingIncome / d.revenue)), noColor: false },
-    { label: "Net Income", values: data.income.map(d => fB(d.netIncome)) },
-    { label: "Net Margin", values: data.income.map(d => fP(d.netIncome / d.revenue)), noColor: false },
-  ] : [];
-
-  const cfRows = data ? [
-    { label: "Operating Cash Flow", values: data.cashflow.map(d => fB(d.operatingCashFlow)) },
-    { label: "CapEx", values: data.cashflow.map(d => fB(d.capitalExpenditure)) },
-    { label: "Free Cash Flow", values: data.cashflow.map(d => fB(d.freeCashFlow)) },
-    { label: "FCF Margin", values: data.cashflow.map((d, i) => fP(d.freeCashFlow / (data.income[i]?.revenue || 1))) },
-    { label: "FCF / Net Income", values: data.cashflow.map(d => fN(d.freeCashFlow / (d.netIncome || 1))) },
-  ] : [];
-
-  const bsRows = data ? [
-    { label: "Cash & Equivalents", values: data.balance.map(d => fB(d.cashAndCashEquivalents)) },
-    { label: "Total Assets", values: data.balance.map(d => fB(d.totalAssets)) },
-    { label: "Total Liabilities", values: data.balance.map(d => fB(d.totalLiabilities)), noColor: true },
-    { label: "Total Debt", values: data.balance.map(d => fB(d.totalDebt)), noColor: true },
-    { label: "Shareholders' Equity", values: data.balance.map(d => fB(d.totalStockholdersEquity)) },
-    { label: "Debt / Equity", values: data.balance.map(d => fN(d.totalDebt / (d.totalStockholdersEquity || 1))), noColor: true },
-  ] : [];
-
-  const valRows = data ? [
-    { label: "P/E Ratio", values: data.ratios.map(d => fX(d.peRatio)), noColor: true },
-    { label: "EV / EBITDA", values: data.ratios.map(d => fX(d.evToEbitda)), noColor: true },
-    { label: "P / FCF", values: data.ratios.map(d => fX(d.priceToFreeCashFlowsRatio)), noColor: true },
-    { label: "Return on Equity", values: data.ratios.map(d => fP(d.returnOnEquity)) },
-    { label: "Return on Assets", values: data.ratios.map(d => fP(d.returnOnAssets)) },
-    { label: "Debt / Equity", values: data.ratios.map(d => fN(d.debtToEquity)), noColor: true },
-  ] : [];
-
-  const TABS = ["Income Statement", "Cash Flow & FCF", "Balance Sheet", "Valuation Ratios", "DCF Model"];
-
-  // ── styles ──────────────────────────────────────────────────────────────────
-  const section = { background: C.surface, border: `1px solid ${C.border}`, padding: 24, marginBottom: 2 };
-  const slider = { display: "flex", alignItems: "center", gap: 12, marginBottom: 10 };
-  const sliderLabel = { color: C.textSoft, fontSize: 12, width: 170, flexShrink: 0 };
-  const sliderVal = { color: C.amber, fontSize: 13, fontWeight: 700, width: 56, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
   return (
-    <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", background: C.bg, minHeight: "100vh", color: C.text }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        input[type=range] { accent-color: ${C.amber}; cursor: pointer; flex: 1; }
-        input[type=text]:focus { outline: none; border-color: ${C.amber} !important; }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: ${C.bg}; }
-        ::-webkit-scrollbar-thumb { background: ${C.dim}; border-radius: 2px; }
-        .tab-btn { background: none; border: none; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; padding: 10px 16px; transition: all 0.15s; white-space: nowrap; }
-        .tab-btn:hover { color: ${C.amber} !important; }
-        .analyse-btn { transition: all 0.15s; }
-        .analyse-btn:hover { background: ${C.amber} !important; color: ${C.bg} !important; }
-      `}</style>
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        {cashflow[0] && (() => {
+          const fcf = cashflow[0].operatingCashFlow + cashflow[0].capitalExpenditure;
+          const conv = fcf / (cashflow[0].netIncome || 1);
+          const fcfYield = marketCap ? fcf / marketCap : null;
+          return (
+            <>
+              <div style={S.kpiCard}>
+                <div style={S.label}>TTM FREE CASH FLOW</div>
+                <div style={S.val}>${fmt(fcf)}</div>
+              </div>
+              <div style={S.kpiCard}>
+                <div style={S.label}>FCF CONVERSION</div>
+                <div style={{ ...S.val, color: conv >= 0.8 ? COLORS.green : COLORS.red }}>{fmtN(conv)}x</div>
+                <div style={{ fontSize: 10, color: COLORS.muted }}>FCF / Net Income {conv < 0.8 ? "⚠ LOW" : "✓ HEALTHY"}</div>
+              </div>
+              {fcfYield != null && (
+                <div style={S.kpiCard}>
+                  <div style={S.label}>FCF YIELD</div>
+                  <div style={S.val}>{pct(fcfYield)}</div>
+                </div>
+              )}
+            </>
+          );
+        })()}
+      </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 20px" }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>CASH FLOW BREAKDOWN (USD Billions)</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="year" tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v) => `$${v.toFixed(1)}B`} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="OperatingCF" fill={COLORS.blue} opacity={0.8} />
+            <Bar dataKey="CapEx" fill={COLORS.red} opacity={0.6} />
+            <Line type="monotone" dataKey="FCF" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
 
-        {/* ── HEADER ── */}
-        <div style={{ marginBottom: 28 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            <div style={{ width: 3, height: 20, background: C.amber }} />
-            <span style={{ fontFamily: "'Syne', sans-serif", fontSize: 22, fontWeight: 800, letterSpacing: -0.5, color: C.text }}>DCF ANALYSER</span>
-            <span style={{ fontSize: 10, color: C.textDim, letterSpacing: 2, marginLeft: 4, paddingTop: 2 }}>FUNDAMENTAL ANALYSIS TERMINAL</span>
-          </div>
-          <div style={{ fontSize: 11, color: C.textDim, paddingLeft: 13 }}>
-            5-year historical data · Income · Cash Flow · Balance Sheet · Valuation · DCF Model
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...S.th, textAlign: "left" }}>METRIC</th>
+            {cashflow.map(d => <th key={d.date} style={S.th}>{d.date?.slice(0, 4)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {[
+            ["Operating Cash Flow", "operatingCashFlow"],
+            ["Capital Expenditure", "capitalExpenditure"],
+            ["Free Cash Flow", null],
+            ["Dividends Paid", "dividendsPaid"],
+            ["Share Buybacks", "commonStockRepurchased"],
+          ].map(([label, key]) => (
+            <tr key={label}>
+              <td style={S.tdL}>{label}</td>
+              {cashflow.map(d => {
+                const v = key ? d[key] : d.operatingCashFlow + d.capitalExpenditure;
+                return <td key={d.date} style={{ ...S.td, color: v >= 0 ? COLORS.text : COLORS.red }}>${fmt(v)}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BalanceSheetTab({ balance }) {
+  const rows = [...balance].reverse();
+  const chartData = rows.map(d => ({
+    year: d.date?.slice(0, 4),
+    Assets: d.totalAssets / 1e9,
+    Liabilities: d.totalLiabilities / 1e9,
+    Equity: d.totalStockholdersEquity / 1e9,
+  }));
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>ASSETS vs LIABILITIES vs EQUITY (USD Billions)</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="year" tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v) => `$${v.toFixed(1)}B`} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="Assets" fill={COLORS.blue} opacity={0.8} />
+            <Bar dataKey="Liabilities" fill={COLORS.red} opacity={0.7} />
+            <Bar dataKey="Equity" fill={COLORS.green} opacity={0.8} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        {balance[0] && (() => {
+          const d = balance[0];
+          const currentRatio = d.totalCurrentAssets / (d.totalCurrentLiabilities || 1);
+          const debtEquity = d.totalDebt / (d.totalStockholdersEquity || 1);
+          const netDebt = d.totalDebt - d.cashAndCashEquivalents;
+          return (
+            <>
+              <div style={S.kpiCard}>
+                <div style={S.label}>CURRENT RATIO</div>
+                <div style={{ ...S.val, color: currentRatio >= 1.5 ? COLORS.green : currentRatio >= 1 ? COLORS.amber : COLORS.red }}>{fmtN(currentRatio)}x</div>
+              </div>
+              <div style={S.kpiCard}>
+                <div style={S.label}>DEBT / EQUITY</div>
+                <div style={{ ...S.val, color: debtEquity <= 1 ? COLORS.green : debtEquity <= 2 ? COLORS.amber : COLORS.red }}>{fmtN(debtEquity)}x</div>
+              </div>
+              <div style={S.kpiCard}>
+                <div style={S.label}>CASH & EQUIVALENTS</div>
+                <div style={S.val}>${fmt(d.cashAndCashEquivalents)}</div>
+              </div>
+              <div style={S.kpiCard}>
+                <div style={S.label}>NET DEBT</div>
+                <div style={{ ...S.val, color: netDebt <= 0 ? COLORS.green : COLORS.text }}>${fmt(netDebt)}</div>
+              </div>
+            </>
+          );
+        })()}
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...S.th, textAlign: "left" }}>METRIC</th>
+            {balance.map(d => <th key={d.date} style={S.th}>{d.date?.slice(0, 4)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {[
+            ["Total Assets", "totalAssets"],
+            ["Total Liabilities", "totalLiabilities"],
+            ["Shareholders Equity", "totalStockholdersEquity"],
+            ["Cash & Equivalents", "cashAndCashEquivalents"],
+            ["Total Debt", "totalDebt"],
+            ["Net Receivables", "netReceivables"],
+          ].map(([label, key]) => (
+            <tr key={key}>
+              <td style={S.tdL}>{label}</td>
+              {balance.map(d => <td key={d.date} style={S.td}>${fmt(d[key])}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ValuationTab({ metrics }) {
+  const rows = [...metrics].reverse();
+  const chartData = rows.map(d => ({
+    year: d.date?.slice(0, 4),
+    PE: d.peRatio,
+    EVEBITDA: d.evToEbitda,
+    PFCF: d.priceToFreeCashFlowsRatio,
+    PB: d.pbRatio,
+  }));
+
+  const avg = (key) => {
+    const vals = metrics.map(d => d[key]).filter(v => v != null && v > 0 && v < 500);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+
+  const current = metrics[0] || {};
+  const ratios = [
+    ["P/E Ratio", "peRatio"],
+    ["EV/EBITDA", "evToEbitda"],
+    ["P/FCF", "priceToFreeCashFlowsRatio"],
+    ["P/Book", "pbRatio"],
+    ["P/Sales", "priceToSalesRatio"],
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>VALUATION MULTIPLES OVER TIME</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="year" tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v) => fmtN(v) + "x"} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line type="monotone" dataKey="PE" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="EVEBITDA" stroke={COLORS.green} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="PFCF" stroke={COLORS.blue} strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...S.th, textAlign: "left" }}>RATIO</th>
+            <th style={S.th}>CURRENT</th>
+            <th style={S.th}>5Y AVG</th>
+            <th style={S.th}>vs AVG</th>
+            <th style={S.th}>SIGNAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ratios.map(([label, key]) => {
+            const cur = current[key];
+            const a = avg(key);
+            const diff = cur && a ? (cur - a) / a : null;
+            return (
+              <tr key={key}>
+                <td style={S.tdL}>{label}</td>
+                <td style={S.td}>{cur ? fmtN(cur) + "x" : "—"}</td>
+                <td style={{ ...S.td, color: COLORS.muted }}>{a ? fmtN(a) + "x" : "—"}</td>
+                <td style={{ ...S.td, color: diff != null ? colorVal(-diff) : COLORS.text }}>
+                  {diff != null ? (diff >= 0 ? "+" : "") + (diff * 100).toFixed(0) + "%" : "—"}
+                </td>
+                <td style={{ ...S.td, color: diff != null && diff > 0.5 ? COLORS.amber : COLORS.green, fontSize: 10 }}>
+                  {diff != null ? (diff > 0.5 ? "⚠ ELEVATED" : diff > 0.2 ? "ABOVE AVG" : "FAIR") : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DCFTab({ cashflow, income, profile }) {
+  const fcfHistory = cashflow.slice(0, 5).map(d => d.operatingCashFlow + d.capitalExpenditure).filter(v => v > 0);
+  const fcfCagr = fcfHistory.length >= 2
+    ? Math.pow(fcfHistory[0] / fcfHistory[fcfHistory.length - 1], 1 / (fcfHistory.length - 1)) - 1
+    : 0.08;
+
+  const sharesOut = profile?.[0]?.sharesOutstanding || income?.[0]?.weightedAverageShsOutDil || 1e9;
+  const currentPrice = profile?.[0]?.price || 0;
+  const latestFCF = fcfHistory[0] || 0;
+
+  const [wacc, setWacc] = useState(10);
+  const [growth, setGrowth] = useState(Math.min(Math.max(Math.round(fcfCagr * 100), 0), 20));
+  const [terminal, setTerminal] = useState(3);
+  const [years, setYears] = useState(5);
+
+  const calcDCF = (g, w, t, yr) => {
+    if (!latestFCF || latestFCF <= 0) return null;
+    let pv = 0;
+    let fcf = latestFCF;
+    for (let i = 1; i <= yr; i++) {
+      fcf *= (1 + g / 100);
+      pv += fcf / Math.pow(1 + w / 100, i);
+    }
+    const tv = (fcf * (1 + t / 100)) / ((w / 100) - (t / 100));
+    pv += tv / Math.pow(1 + w / 100, yr);
+    return pv / sharesOut;
+  };
+
+  const intrinsic = calcDCF(growth, wacc, terminal, years);
+  const upside = intrinsic && currentPrice ? (intrinsic - currentPrice) / currentPrice : null;
+
+  const waccRange = [7, 8, 9, 10, 11, 12, 13];
+  const growthRange = [0, 3, 5, 8, 10, 12, 15];
+
+  const sliderStyle = { width: "100%", accentColor: COLORS.amber };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
+        <div style={{ flex: 1, minWidth: 280 }}>
+          <div style={{ ...S.card, marginBottom: 0 }}>
+            <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 16 }}>DCF ASSUMPTIONS</div>
+            {[
+              ["Revenue Growth Rate", growth, setGrowth, 0, 30, "%", `Auto from FCF CAGR: ${(fcfCagr * 100).toFixed(1)}%`],
+              ["WACC", wacc, setWacc, 5, 20, "%", "Weighted avg cost of capital"],
+              ["Terminal Growth Rate", terminal, setTerminal, 0, 5, "%", "Long-run GDP growth assumption"],
+              ["Projection Years", years, setYears, 3, 10, "yr", ""],
+            ].map(([label, val, setter, min, max, unit, hint]) => (
+              <div key={label} style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: COLORS.muted }}>{label}</span>
+                  <span style={{ color: COLORS.amber, fontWeight: 700 }}>{val}{unit}</span>
+                </div>
+                <input type="range" min={min} max={max} value={val}
+                  onChange={e => setter(Number(e.target.value))} style={sliderStyle} />
+                {hint && <div style={{ fontSize: 10, color: COLORS.muted, marginTop: 2 }}>{hint}</div>}
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* ── SEARCH ── */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-          <input
-            type="text" value={ticker} placeholder="Enter ticker  —  AAPL · MSFT · NVDA · TSLA"
-            onChange={e => setTicker(e.target.value.toUpperCase())}
-            onKeyDown={e => e.key === "Enter" && analyse()}
-            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 0, padding: "11px 16px", color: C.text, fontSize: 14, fontFamily: "inherit", letterSpacing: 1 }}
-          />
-          <button className="analyse-btn" onClick={analyse} disabled={loading}
-            style={{ background: "transparent", border: `1px solid ${C.amber}`, color: C.amber, padding: "11px 28px", fontFamily: "inherit", fontSize: 12, fontWeight: 700, letterSpacing: 2, cursor: "pointer", textTransform: "uppercase" }}>
-            {loading ? "LOADING…" : "ANALYSE →"}
-          </button>
-        </div>
-
-        {FMP_KEY === "demo" && !data && (
-          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 16, padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface }}>
-            ⬡ DEMO MODE — showing simulated data. To enable live Yahoo Finance data, set <span style={{ color: C.amber }}>REACT_APP_FMP_KEY</span> to any non-demo value in your environment variables (e.g. <span style={{ color: C.amber }}>"live"</span>). No API key required — Yahoo Finance is free.
-          </div>
-        )}
-
-        {error && (
-          <div style={{ padding: "10px 14px", border: `1px solid ${C.red}44`, background: "#ff4d4d08", color: C.red, fontSize: 12, marginBottom: 16 }}>
-            ✗ {error}
-          </div>
-        )}
-
-        {/* ── COMPANY HEADER ── */}
-        {data && (
-          <>
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.amber}`, padding: "16px 20px", marginBottom: 2, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-              <div>
-                <div style={{ fontFamily: "'Syne', sans-serif", fontSize: 18, fontWeight: 700, color: C.text }}>{data.profile.name}</div>
-                <div style={{ fontSize: 11, color: C.textSoft, marginTop: 3 }}>
-                  {ticker} · {data.profile.sector} · {fB(data.profile.mktCap)} market cap · β {fN(data.profile.beta, 2)}
+        <div style={{ flex: 1, minWidth: 280 }}>
+          <div style={{ ...S.card, marginBottom: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: COLORS.muted, letterSpacing: 1, marginBottom: 8 }}>INTRINSIC VALUE</div>
+            <div style={{ fontSize: 42, fontWeight: 700, color: COLORS.amber }}>
+              {intrinsic ? `$${intrinsic.toFixed(2)}` : "—"}
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>per share</div>
+            {currentPrice > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
+                <div style={{ fontSize: 11, color: COLORS.muted }}>CURRENT PRICE</div>
+                <div style={{ fontSize: 24, fontWeight: 700 }}>${currentPrice.toFixed(2)}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: upside >= 0 ? COLORS.green : COLORS.red, marginTop: 8 }}>
+                  {upside != null ? (upside >= 0 ? "▲ " : "▼ ") + Math.abs(upside * 100).toFixed(1) + "% " : ""}
+                  {upside != null ? (upside >= 0 ? "UNDERVALUED" : "OVERVALUED") : ""}
                 </div>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 24, fontWeight: 700, color: C.amber, fontVariantNumeric: "tabular-nums" }}>${data.profile.price?.toFixed(2)}</div>
-                <div style={{ fontSize: 11, color: C.textSoft }}>current price</div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            {[
+              ["BEAR", growth - 5, wacc + 2],
+              ["BASE", growth, wacc],
+              ["BULL", growth + 5, wacc - 2],
+            ].map(([label, g, w]) => {
+              const v = calcDCF(Math.max(g, 0), Math.max(w, 5), terminal, years);
+              const up = v && currentPrice ? (v - currentPrice) / currentPrice : null;
+              return (
+                <div key={label} style={{ flex: 1, ...S.card, marginBottom: 0, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: COLORS.muted, marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: label === "BULL" ? COLORS.green : label === "BEAR" ? COLORS.red : COLORS.amber }}>
+                    {v ? `$${v.toFixed(2)}` : "—"}
+                  </div>
+                  <div style={{ fontSize: 10, color: up >= 0 ? COLORS.green : COLORS.red }}>
+                    {up != null ? (up >= 0 ? "+" : "") + (up * 100).toFixed(0) + "%" : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 12 }}>SENSITIVITY: INTRINSIC VALUE vs WACC × GROWTH RATE</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr>
+              <th style={{ ...S.th, textAlign: "center", minWidth: 60 }}>G↓ W→</th>
+              {waccRange.map(w => <th key={w} style={{ ...S.th, minWidth: 70 }}>{w}%</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {growthRange.map(g => (
+              <tr key={g}>
+                <td style={{ ...S.tdL, textAlign: "center", color: COLORS.amber }}>{g}%</td>
+                {waccRange.map(w => {
+                  const v = calcDCF(g, w, terminal, years);
+                  const up = v && currentPrice ? (v - currentPrice) / currentPrice : null;
+                  return (
+                    <td key={w} style={{
+                      ...S.td,
+                      background: up == null ? "transparent" : up > 0.3 ? "#0d2b1a" : up > 0 ? "#1a2b0d" : up > -0.3 ? "#2b1a0d" : "#2b0d0d",
+                      color: up == null ? COLORS.text : up > 0 ? COLORS.green : COLORS.red,
+                      fontWeight: g === growth && w === wacc ? 700 : 400,
+                      border: g === growth && w === wacc ? `1px solid ${COLORS.amber}` : `1px solid ${COLORS.border}`,
+                    }}>
+                      {v ? `$${v.toFixed(0)}` : "—"}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [ticker, setTicker] = useState("");
+  const [input, setInput] = useState("");
+  const [tab, setTab] = useState("income");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState(null);
+
+  const search = useCallback(async (sym) => {
+    if (!sym) return;
+    setLoading(true);
+    setError(null);
+    setData(null);
+    try {
+      const [profile, income, balance, cashflow, metrics] = await Promise.all([
+        fmpFetch(`/stable/profile?symbol=${sym}`),
+        fmpFetch(`/stable/income-statement?symbol=${sym}&period=annual&limit=5`),
+        fmpFetch(`/stable/balance-sheet-statement?symbol=${sym}&period=annual&limit=5`),
+        fmpFetch(`/stable/cash-flow-statement?symbol=${sym}&period=annual&limit=5`),
+        fmpFetch(`/stable/key-metrics?symbol=${sym}&period=annual&limit=5`),
+      ]);
+
+      if (!income?.length) throw new Error(`No data found for "${sym}". Check the ticker symbol.`);
+      setData({ profile, income, balance, cashflow, metrics });
+      setTicker(sym.toUpperCase());
+      setTab("income");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const p = data?.profile?.[0];
+  const TABS = [
+    { id: "income", label: "INCOME STATEMENT" },
+    { id: "cashflow", label: "CASH FLOW" },
+    { id: "balance", label: "BALANCE SHEET" },
+    { id: "valuation", label: "VALUATION" },
+    { id: "dcf", label: "DCF MODEL" },
+  ];
+
+  return (
+    <div style={S.app}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px" }}>
+
+        {/* HEADER */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 11, color: COLORS.muted, letterSpacing: 2, marginBottom: 4 }}>DCF FINANCIAL ANALYSER</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: COLORS.amber, letterSpacing: 1 }}>
+              {ticker || "ENTER TICKER"}
+            </div>
+            {p && <div style={{ fontSize: 11, color: COLORS.dim }}>{p.companyName} · {p.sector} · {p.exchange}</div>}
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              style={S.input}
+              placeholder="TICKER (e.g. AAPL)"
+              value={input}
+              onChange={e => setInput(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key === "Enter" && search(input)}
+            />
+            <button style={S.btn} onClick={() => search(input)} disabled={loading}>
+              {loading ? "LOADING..." : "ANALYSE →"}
+            </button>
+          </div>
+        </div>
+
+        {/* KPI STRIP */}
+        {p && data && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+            {[
+              ["PRICE", `$${p.price?.toFixed(2) || "—"}`],
+              ["MKT CAP", `$${fmt(p.mktCap)}`],
+              ["BETA", fmtN(p.beta)],
+              ["52W HIGH", `$${p.range?.split("-")?.[1]?.trim() || "—"}`],
+              ["52W LOW", `$${p.range?.split("-")?.[0]?.trim() || "—"}`],
+              ["P/E", fmtN(p.pe) + "x"],
+              ["DIV YIELD", pct(p.lastDiv / p.price)],
+              ["EMPLOYEES", fmt(p.fullTimeEmployees, 0)],
+            ].map(([label, value]) => (
+              <div key={label} style={{ ...S.kpiCard, minWidth: 100, flex: 1 }}>
+                <div style={S.label}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{value}</div>
               </div>
-            </div>
+            ))}
+          </div>
+        )}
 
-            {/* ── KPI ROW ── */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 2, marginBottom: 2 }}>
-              {(() => {
-                const latestI = data.income[data.income.length - 1];
-                const latestCF = data.cashflow[data.cashflow.length - 1];
-                const revGrowth = pct(data.income[data.income.length-1]?.revenue, data.income[data.income.length-2]?.revenue);
-                const fcfMargin = latestCF.freeCashFlow / latestI.revenue;
-                const netMargin = latestI.netIncome / latestI.revenue;
-                const roic = data.ratios[data.ratios.length-1]?.returnOnEquity;
-                return [
-                  <KPI key="rev" label="TTM Revenue" value={fB(latestI.revenue)} sub={`${revGrowth >= 0 ? "+" : ""}${fP(revGrowth)} YoY`} trend={revGrowth} />,
-                  <KPI key="fcf" label="Free Cash Flow" value={fB(latestCF.freeCashFlow)} sub={`${fP(fcfMargin)} FCF margin`} color={C.green} />,
-                  <KPI key="margin" label="Net Margin" value={fP(netMargin)} sub={`${fB(latestI.netIncome)} net income`} />,
-                  <KPI key="roe" label="Return on Equity" value={fP(roic)} sub="latest fiscal year" color={C.blue} />,
-                ];
-              })()}
-            </div>
+        {/* ERROR */}
+        {error && (
+          <div style={{ ...S.card, borderColor: COLORS.red, color: COLORS.red, padding: 16 }}>
+            ⚠ {error}
+          </div>
+        )}
 
-            {/* ── TABS ── */}
-            <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, background: C.surface, marginBottom: 2, overflowX: "auto" }}>
-              {TABS.map((t, i) => (
-                <button key={i} className="tab-btn"
-                  onClick={() => setActiveTab(i)}
-                  style={{ color: activeTab === i ? C.amber : C.textSoft, borderBottom: activeTab === i ? `2px solid ${C.amber}` : "2px solid transparent" }}>
-                  {t}
+        {/* EMPTY STATE */}
+        {!data && !loading && !error && (
+          <div style={{ ...S.card, textAlign: "center", padding: 60, color: COLORS.muted }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>⬡</div>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>Enter a ticker symbol to begin analysis</div>
+            <div style={{ fontSize: 11 }}>Try: AAPL · MSFT · GOOGL · TSLA · AMZN · NVDA</div>
+          </div>
+        )}
+
+        {/* LOADING */}
+        {loading && (
+          <div style={{ ...S.card, textAlign: "center", padding: 60, color: COLORS.amber }}>
+            <div style={{ fontSize: 14 }}>FETCHING DATA FOR {input}...</div>
+          </div>
+        )}
+
+        {/* TABS + CONTENT */}
+        {data && !loading && (
+          <div>
+            <div style={{ display: "flex", borderBottom: `1px solid ${COLORS.border}`, marginBottom: 20, overflowX: "auto" }}>
+              {TABS.map(t => (
+                <button key={t.id} style={S.tab(tab === t.id)} onClick={() => setTab(t.id)}>
+                  {t.label}
                 </button>
               ))}
             </div>
 
-            {/* ══════════════════════════════════════════
-                TAB 0 — INCOME STATEMENT
-            ══════════════════════════════════════════ */}
-            {activeTab === 0 && (
-              <div style={section}>
-                <SectionHead n={1} label="Income Statement" sub="5-year trend" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>REVENUE & PROFIT ($B)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={incomeChart} barGap={2}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={35} tickFormatter={v => `${v}B`} />
-                        <Tooltip content={<ChartTip formatter={v => `$${v}B`} />} />
-                        <Bar dataKey="Revenue" fill={C.blue} opacity={0.7} radius={[1,1,0,0]} />
-                        <Bar dataKey="Gross Profit" fill={C.amber} opacity={0.8} radius={[1,1,0,0]} />
-                        <Bar dataKey="Net Income" fill={C.green} radius={[1,1,0,0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>MARGIN TRENDS (%)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <LineChart data={marginChart}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={32} tickFormatter={v => `${v}%`} />
-                        <Tooltip content={<ChartTip formatter={v => `${v}%`} />} />
-                        <Line type="monotone" dataKey="Gross Margin" stroke={C.amber} strokeWidth={2} dot={{ fill: C.amber, r: 3 }} />
-                        <Line type="monotone" dataKey="Op Margin" stroke={C.blue} strokeWidth={2} dot={{ fill: C.blue, r: 3 }} />
-                        <Line type="monotone" dataKey="Net Margin" stroke={C.green} strokeWidth={2} dot={{ fill: C.green, r: 3 }} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: C.textSoft }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-                <MetricTable rows={incomeRows} years={years} />
-              </div>
-            )}
+            <div style={S.card}>
+              {tab === "income" && <IncomeTab income={data.income} />}
+              {tab === "cashflow" && <CashFlowTab cashflow={data.cashflow} profile={data.profile} />}
+              {tab === "balance" && <BalanceSheetTab balance={data.balance} />}
+              {tab === "valuation" && <ValuationTab metrics={data.metrics} />}
+              {tab === "dcf" && <DCFTab cashflow={data.cashflow} income={data.income} profile={data.profile} />}
+            </div>
 
-            {/* ══════════════════════════════════════════
-                TAB 1 — CASH FLOW & FCF
-            ══════════════════════════════════════════ */}
-            {activeTab === 1 && (
-              <div style={section}>
-                <SectionHead n={2} label="Cash Flow & FCF Quality" sub="Operating CF · CapEx · Free Cash Flow" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>CASH FLOW WATERFALL ($B)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={fcfChart} barGap={2}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={35} tickFormatter={v => `${v}B`} />
-                        <Tooltip content={<ChartTip formatter={v => `$${v}B`} />} />
-                        <Bar dataKey="Operating CF" fill={C.blue} opacity={0.7} radius={[1,1,0,0]} />
-                        <Bar dataKey="CapEx" fill={C.red} opacity={0.7} radius={[1,1,0,0]} />
-                        <Bar dataKey="FCF" fill={C.green} radius={[1,1,0,0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>FCF vs NET INCOME ($B) — QUALITY CHECK</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <ComposedChart data={fcfChart}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={35} tickFormatter={v => `${v}B`} />
-                        <Tooltip content={<ChartTip formatter={v => `$${v}B`} />} />
-                        <Area type="monotone" dataKey="FCF" fill={C.green + "22"} stroke={C.green} strokeWidth={2} />
-                        <Line type="monotone" dataKey="Net Income" stroke={C.amber} strokeWidth={2} strokeDasharray="4 2" dot={{ fill: C.amber, r: 3 }} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: C.textSoft }} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                    <div style={{ fontSize: 10, color: C.textDim, marginTop: 6 }}>
-                      ↑ FCF tracking above net income = high earnings quality
-                    </div>
-                  </div>
-                </div>
-                <MetricTable rows={cfRows} years={years} />
-              </div>
-            )}
-
-            {/* ══════════════════════════════════════════
-                TAB 2 — BALANCE SHEET
-            ══════════════════════════════════════════ */}
-            {activeTab === 2 && (
-              <div style={section}>
-                <SectionHead n={3} label="Balance Sheet Health" sub="Assets · Liabilities · Debt · Equity" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>CASH vs DEBT ($B)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={balanceChart} barGap={4}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={35} tickFormatter={v => `${v}B`} />
-                        <Tooltip content={<ChartTip formatter={v => `$${v}B`} />} />
-                        <Bar dataKey="Cash" fill={C.green} radius={[2,2,0,0]} />
-                        <Bar dataKey="Debt" fill={C.red} opacity={0.75} radius={[2,2,0,0]} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: C.textSoft }} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>EQUITY TREND ($B)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <ComposedChart data={balanceChart}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={35} tickFormatter={v => `${v}B`} />
-                        <Tooltip content={<ChartTip formatter={v => `$${v}B`} />} />
-                        <Area type="monotone" dataKey="Equity" fill={C.blue + "22"} stroke={C.blue} strokeWidth={2} />
-                        <ReferenceLine y={0} stroke={C.muted} strokeDasharray="3 3" />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-                <MetricTable rows={bsRows} years={years} />
-              </div>
-            )}
-
-            {/* ══════════════════════════════════════════
-                TAB 3 — VALUATION RATIOS
-            ══════════════════════════════════════════ */}
-            {activeTab === 3 && (
-              <div style={section}>
-                <SectionHead n={4} label="Valuation Ratios" sub="P/E · EV/EBITDA · P/FCF · ROE · ROA" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>MULTIPLES OVER TIME</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <LineChart data={valChart}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={28} tickFormatter={v => `${v}x`} />
-                        <Tooltip content={<ChartTip formatter={v => `${v}x`} />} />
-                        <Line type="monotone" dataKey="P/E" stroke={C.amber} strokeWidth={2} dot={{ fill: C.amber, r: 3 }} />
-                        <Line type="monotone" dataKey="EV/EBITDA" stroke={C.blue} strokeWidth={2} dot={{ fill: C.blue, r: 3 }} />
-                        <Line type="monotone" dataKey="P/FCF" stroke={C.green} strokeWidth={2} dot={{ fill: C.green, r: 3 }} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: C.textSoft }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.textSoft, marginBottom: 10, letterSpacing: 1 }}>RETURNS (ROE / ROA)</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <LineChart data={data.ratios.map(d => ({ year: d.date.slice(0,4), ROE: +(d.returnOnEquity * 100).toFixed(1), ROA: +(d.returnOnAssets * 100).toFixed(1) }))}>
-                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="year" tick={{ fill: C.textSoft, fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: C.textSoft, fontSize: 10 }} axisLine={false} tickLine={false} width={32} tickFormatter={v => `${v}%`} />
-                        <Tooltip content={<ChartTip formatter={v => `${v}%`} />} />
-                        <Line type="monotone" dataKey="ROE" stroke={C.amber} strokeWidth={2} dot={{ fill: C.amber, r: 3 }} />
-                        <Line type="monotone" dataKey="ROA" stroke={C.green} strokeWidth={2} dot={{ fill: C.green, r: 3 }} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: C.textSoft }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-                <MetricTable rows={valRows} years={years} />
-              </div>
-            )}
-
-            {/* ══════════════════════════════════════════
-                TAB 4 — DCF MODEL
-            ══════════════════════════════════════════ */}
-            {activeTab === 4 && dcf && (
-              <div style={section}>
-                <SectionHead n={5} label="DCF Model" sub="Auto-populated from historical FCF · adjust assumptions below" />
-
-                {/* FCF History context */}
-                <div style={{ background: C.bg, border: `1px solid ${C.border}`, padding: "12px 16px", marginBottom: 20, display: "flex", gap: 24, flexWrap: "wrap" }}>
-                  <div><span style={{ fontSize: 10, color: C.textDim, display: "block", marginBottom: 3 }}>BASE FCF (latest)</span><span style={{ color: C.green, fontWeight: 700 }}>{fB(latestFCF)}</span></div>
-                  <div><span style={{ fontSize: 10, color: C.textDim, display: "block", marginBottom: 3 }}>HISTORICAL FCF CAGR</span><span style={{ color: C.amber, fontWeight: 700 }}>{fP(fcfCAGR)}</span></div>
-                  <div><span style={{ fontSize: 10, color: C.textDim, display: "block", marginBottom: 3 }}>SUGGESTED GROWTH (70% of CAGR)</span><span style={{ color: C.amber, fontWeight: 700 }}>{fP(suggestedGrowth)}</span></div>
-                  <div><span style={{ fontSize: 10, color: C.textDim, display: "block", marginBottom: 3 }}>NET CASH / (DEBT)</span><span style={{ color: cash - debt >= 0 ? C.green : C.red, fontWeight: 700 }}>{fB(cash - debt)}</span></div>
-                </div>
-
-                {/* Assumptions sliders */}
-                <div style={{ background: C.bg, border: `1px solid ${C.border}`, padding: "16px 20px", marginBottom: 20 }}>
-                  <div style={{ fontSize: 10, color: C.amber, letterSpacing: 2, marginBottom: 14, fontWeight: 700 }}>ASSUMPTIONS</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 32px" }}>
-                    <div>
-                      <div style={slider}>
-                        <span style={sliderLabel}>Growth Rate Adjustment</span>
-                        <input type="range" min={-0.1} max={0.15} step={0.005} value={growthAdj} onChange={e => setGrowthAdj(+e.target.value)} />
-                        <span style={sliderVal}>{growthAdj >= 0 ? "+" : ""}{fP(growthAdj)}</span>
-                      </div>
-                      <div style={slider}>
-                        <span style={sliderLabel}>WACC (Discount Rate)</span>
-                        <input type="range" min={0.04} max={0.25} step={0.005} value={wacc} onChange={e => setWacc(+e.target.value)} />
-                        <span style={sliderVal}>{fP(wacc)}</span>
-                      </div>
-                    </div>
-                    <div>
-                      <div style={slider}>
-                        <span style={sliderLabel}>Terminal Growth Rate</span>
-                        <input type="range" min={0.005} max={0.05} step={0.005} value={termGrowth} onChange={e => setTermGrowth(+e.target.value)} />
-                        <span style={sliderVal}>{fP(termGrowth)}</span>
-                      </div>
-                      <div style={slider}>
-                        <span style={sliderLabel}>Projection Years</span>
-                        <input type="range" min={3} max={10} step={1} value={projYears} onChange={e => setProjYears(+e.target.value)} />
-                        <span style={sliderVal}>{projYears}Y</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 11, color: C.textDim, marginTop: 8 }}>
-                    Effective growth rate: <span style={{ color: C.amber }}>{fP(effectiveGrowth)}</span> (suggested {fP(suggestedGrowth)} {growthAdj >= 0 ? "+" : ""} {fP(growthAdj)} adjustment)
-                  </div>
-                </div>
-
-                {/* DCF output KPIs */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 2, marginBottom: 20 }}>
-                  <KPI label="Intrinsic Value" value={dcf.intrinsicPrice ? `$${dcf.intrinsicPrice.toFixed(2)}` : "—"} color={C.amber} />
-                  <KPI label="Upside / Downside" value={upside != null ? `${upside >= 0 ? "+" : ""}${fP(upside)}` : "—"}
-                    color={upside == null ? C.text : upside > 0.15 ? C.green : upside > 0 ? C.green : C.red}
-                    sub={`vs $${currentPrice.toFixed(2)} current`} trend={upside} />
-                  <KPI label="Enterprise Value" value={fB(dcf.enterpriseValue)} color={C.blue} />
-                  <KPI label="PV of Terminal Value" value={fB(dcf.pvTerminal)} sub={`${fP(dcf.pvTerminal / dcf.enterpriseValue)} of EV`} />
-                </div>
-
-                {/* FCF projection table */}
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead>
-                      <tr>
-                        {["Year", "Projected FCF", "Growth", "Discount Factor", "PV of FCF"].map(h => (
-                          <th key={h} style={{ textAlign: "left", padding: "8px 12px", color: C.textSoft, fontWeight: 600, borderBottom: `1px solid ${C.border}`, background: C.bg }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dcf.flows.map((row, i) => (
-                        <tr key={i} style={{ borderBottom: `1px solid ${C.border}22` }}>
-                          <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 600 }}>{row.year}</td>
-                          <td style={{ padding: "8px 12px", color: C.text }}>{fB(row.fcf)}</td>
-                          <td style={{ padding: "8px 12px", color: C.green }}>{fP(effectiveGrowth)}</td>
-                          <td style={{ padding: "8px 12px", color: C.textSoft }}>{(1 / Math.pow(1 + wacc, i + 1)).toFixed(4)}</td>
-                          <td style={{ padding: "8px 12px", color: C.text, fontVariantNumeric: "tabular-nums" }}>{fB(row.discounted)}</td>
-                        </tr>
-                      ))}
-                      <tr style={{ background: C.border + "44", borderTop: `1px solid ${C.amber}44` }}>
-                        <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700 }}>Terminal</td>
-                        <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700 }}>{fB(dcf.terminalValue)}</td>
-                        <td style={{ padding: "8px 12px", color: C.textSoft }}>{fP(termGrowth)} (terminal)</td>
-                        <td style={{ padding: "8px 12px", color: C.textSoft }}>{(1 / Math.pow(1 + wacc, projYears)).toFixed(4)}</td>
-                        <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700 }}>{fB(dcf.pvTerminal)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Value bridge */}
-                <div style={{ marginTop: 20, background: C.bg, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
-                  <div style={{ fontSize: 10, color: C.amber, letterSpacing: 2, marginBottom: 14, fontWeight: 700 }}>EQUITY VALUE BRIDGE</div>
-                  {[
-                    { label: "PV of FCF (projection)", value: dcf.pv, max: Math.abs(dcf.equityValue), color: C.blue },
-                    { label: "PV of Terminal Value", value: dcf.pvTerminal, max: Math.abs(dcf.equityValue), color: C.amber },
-                    { label: "+ Cash & Equivalents", value: cash, max: Math.abs(dcf.equityValue), color: C.green },
-                    { label: "− Total Debt", value: -debt, max: Math.abs(dcf.equityValue), color: C.red },
-                  ].map((row, i) => (
-                    <div key={i} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                        <span style={{ fontSize: 12, color: C.textSoft }}>{row.label}</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: row.color, fontVariantNumeric: "tabular-nums" }}>{fB(row.value)}</span>
-                      </div>
-                      <div style={{ background: C.border, borderRadius: 1, height: 4 }}>
-                        <div style={{ width: `${Math.min(100, Math.abs(row.value / row.max) * 100)}%`, height: 4, background: row.color, borderRadius: 1 }} />
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, marginTop: 12, display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 13, color: C.textSoft, fontWeight: 600 }}>Equity Value</span>
-                    <span style={{ fontSize: 16, fontWeight: 700, color: C.amber }}>{fB(dcf.equityValue)}</span>
-                  </div>
-                </div>
-
-                <div style={{ fontSize: 10, color: C.textDim, marginTop: 12 }}>
-                  ⚠ For educational purposes only. Not financial advice. DCF models are highly sensitive to assumptions.
+            {p?.description && (
+              <div style={{ ...S.card, marginTop: 12 }}>
+                <div style={{ color: COLORS.amber, fontSize: 11, letterSpacing: 1, marginBottom: 8 }}>COMPANY OVERVIEW</div>
+                <div style={{ fontSize: 11, color: COLORS.dim, lineHeight: 1.6 }}>
+                  {p.description?.slice(0, 500)}...
                 </div>
               </div>
             )}
-          </>
-        )}
-
-        {!data && !loading && (
-          <div style={{ textAlign: "center", padding: "60px 0", color: C.textDim }}>
-            <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>⬡</div>
-            <div style={{ fontSize: 13 }}>Enter a ticker symbol to begin analysis</div>
-            <div style={{ fontSize: 11, marginTop: 6 }}>Try AAPL · MSFT · NVDA · GOOGL · AMZN</div>
           </div>
         )}
+
+        <div style={{ textAlign: "center", fontSize: 10, color: COLORS.muted, marginTop: 24 }}>
+          DATA: Financial Modeling Prep · FOR EDUCATIONAL USE ONLY · NOT FINANCIAL ADVICE
+        </div>
       </div>
     </div>
   );
