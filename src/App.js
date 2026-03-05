@@ -541,6 +541,7 @@ function DCFTab({ cashflow, income, profile }) {
 export default function App() {
   const [ticker, setTicker] = useState("");
   const [input, setInput] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
   const [tab, setTab] = useState("income");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -594,12 +595,31 @@ export default function App() {
             {p && <div style={{ fontSize: 11, color: COLORS.dim }}>{p.companyName} · {p.sector} · {p.exchange}</div>}
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ position: "relative" }}>
             <input
               style={S.input}
-              placeholder="TICKER (e.g. AAPL)"
+              placeholder="Search company or ticker..."
               value={input}
-              onChange={e => setInput(e.target.value.toUpperCase())}
-              onKeyDown={e => e.key === "Enter" && search(input)}
+              onChange={e => handleTickerInput(e.target.value)}
+              onKeyDown={e => { if(e.key === "Enter") { setSuggestions([]); search(input); } }}
+              autoComplete="off"
+            />
+            {suggestions.length > 0 && (
+              <div style={{ position: "absolute", top: "100%", right: 0, minWidth: 320, background: "#131820", border: `1px solid ${COLORS.border}`, zIndex: 100, maxHeight: 240, overflowY: "auto" }}>
+                {suggestions.map(s => (
+                  <div key={s.symbol} onClick={() => { setInput(s.symbol); setSuggestions([]); search(s.symbol); }}
+                    style={{ padding: "8px 14px", cursor: "pointer", borderBottom: `1px solid ${COLORS.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                    onMouseEnter={e => e.currentTarget.style.background = COLORS.card}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <span style={{ color: COLORS.amber, fontWeight: 700, fontSize: 13 }}>{s.symbol}</span>
+                    <span style={{ color: COLORS.dim, fontSize: 12, marginLeft: 10 }}>{s.name}</span>
+                    <span style={{ color: COLORS.muted, fontSize: 11, marginLeft: 10 }}>{s.exchangeShortName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <input style={{display:"none"}}
             />
             <button style={S.btn} onClick={() => search(input)} disabled={loading}>
               {loading ? "LOADING..." : "ANALYSE →"}
