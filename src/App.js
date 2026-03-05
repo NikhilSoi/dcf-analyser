@@ -547,6 +547,16 @@ export default function App() {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
 
+  const handleTickerInput = async (val) => {
+    setInput(val);
+    if (val.length < 2) { setSuggestions([]); return; }
+    try {
+      const res = await fetch(`/api/fmp?path=/stable/search&query=${encodeURIComponent(val)}&limit=8`);
+      const data = await res.json();
+      if (Array.isArray(data)) setSuggestions(data.slice(0, 8));
+    } catch(e) { setSuggestions([]); }
+  };
+
   const search = useCallback(async (sym) => {
     if (!sym) return;
     setLoading(true);
