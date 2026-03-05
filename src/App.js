@@ -47,7 +47,14 @@ const S = {
 const tooltipStyle = { backgroundColor: COLORS.card, border: `1px solid ${COLORS.border}`, fontFamily: "inherit", fontSize: 11 };
 
 async function fmpFetch(path) {
-  const url = `${BASE}${path}&apikey=${FMP}`;
+  const isLocal = window.location.hostname === "localhost";
+  let url;
+  if (isLocal) {
+    url = `/fmpapi${path}&apikey=${FMP}`;
+  } else {
+    const [endpoint, qs] = path.split('?');
+    url = `/api/fmp?path=${endpoint}&${qs}`;
+  }
   const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
